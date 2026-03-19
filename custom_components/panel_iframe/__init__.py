@@ -1,7 +1,8 @@
 """
-Custom Panel Iframe Integration for Home Assistant
-Compatible with latest Home Assistant versions
+Panel Iframe Integration for Home Assistant
+Complete implementation for latest HA versions
 """
+
 import logging
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -187,3 +188,46 @@ async def async_register_panel(
 async def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Setup function for older Home Assistant versions."""
     return await async_setup(hass, config)
+
+
+# Additional helper functions for iframe rendering
+async def async_render_iframe_panel(hass: HomeAssistant, panel_id: str, options: Dict[str, Any]):
+    """Render an iframe panel directly."""
+    from aiohttp import web
+    
+    async def iframe_handler(request):
+        """Handle iframe requests."""
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>{options[CONF_TITLE]}</title>
+            <style>
+                body {{
+                    margin: 0;
+                    padding: 0;
+                    height: 100vh;
+                    overflow: hidden;
+                    background-color: white;
+                }}
+                iframe {{
+                    width: 100%;
+                    height: 100%;
+                    border: none;
+                }}
+            </style>
+        </head>
+        <body>
+            <iframe 
+                src="{options[CONF_URL]}" 
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation"
+                referrerpolicy="no-referrer"
+            ></iframe>
+        </body>
+        </html>
+        """
+        return web.Response(text=html_content, content_type='text/html')
+    
+    # Register the handler
+    hass.http.app.router.add_get(f"/local/panel_iframe/{slugify(panel_id)}", iframe_handler)
