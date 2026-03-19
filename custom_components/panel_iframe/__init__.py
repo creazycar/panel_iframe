@@ -1,149 +1,152 @@
 """
-Panel Iframe Custom Component for Home Assistant
-Compatible with latest Home Assistant versions
+Panel Iframe Component for Home Assistant
+This module has been updated to work with the latest version of Home Assistant
 """
+import asyncio
 import logging
-from typing import Dict, Any
-from homeassistant.components import frontend
-from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import ConfigType
+from typing import Any, Dict, Optional
+
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+from homeassistant.components import frontend
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_ICON, CONF_REQUIRE_ADMIN, CONF_URL
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import collection
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import slugify
+
+_LOGGER = logging.getLogger(__name__)
+
+CONF_TITLE = "title"
+CONF_DISABLE_PINNING = "disable_pinning"
 
 DOMAIN = "panel_iframe"
-_LOGGER = logging.getLogger(__name__)
+
+CONF_RELATIVE_PANEL_URL = "relative_panel_url"
+
+DEFAULT_ICON = "mdi:iframe"
 
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
-                vol.Optional("panels"): vol.Schema(
-                    {
-                        str: {
-                            vol.Required("title"): str,
-                            vol.Required("icon", default="mdi:iframe"): str,
-                            vol.Required("url"): str,
-                            vol.Optional("require_admin", default=False): bool,
-                        }
-                    }
-                )
+                str: {
+                    vol.Required(CONF_TITLE): cv.string,
+                    vol.Required(CONF_URL): cv.string,
+                    vol.Optional(CONF_RELATIVE_PANEL_URL): cv.string,
+                    vol.Optional(CONF_ICON, default=DEFAULT_ICON): cv.icon,
+                    vol.Optional(CONF_REQUIRE_ADMIN, default=False): cv.boolean,
+                    vol.Optional(CONF_DISABLE_PINNING, default=False): cv.boolean,
+                }
             }
         )
     },
     extra=vol.ALLOW_EXTRA,
 )
 
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the Panel Iframe component."""
+    """Set up the Panel IFrame component."""
+    hass.data.setdefault(DOMAIN, {})
+    
     conf = config.get(DOMAIN)
     if conf is None:
         return True
 
-    panels = conf.get("panels", {})
+    # Create panel iframes
+    for panel_id, options in conf.items():
+        # Make sure required values are set
+        assert CONF_URL in options
+        assert CONF_TITLE in options
 
-    for panel_id, panel_data in panels.items():
-        hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "manual"},
-                data={
-                    "panel_id": panel_id,
-                    "title": panel_data["title"],
-                    "icon": panel_data["icon"],
-                    "url": panel_data["url"],
-                    "require_admin": panel_data.get("require_admin", False),
-                },
-            )
+        # Set default value for optional values
+        if CONF_ICON not in options:
+            options[CONF_ICON] = DEFAULT_ICON
+        if CONF_REQUIRE_ADMIN not in options:
+            options[CONF_REQUIRE_ADMIN] = False
+        if CONF_DISABLE_PINNING not in options:
+            options[CONF_DISABLE_PINNING] = False
+
+        # Register panel
+        await async_register_panel(
+            hass,
+            panel_id,
+            options[CONF_URL],
+            options.get(CONF_RELATIVE_PANEL_URL),
+            options[CONF_TITLE],
+            options[CONF_ICON],
+            options[CONF_REQUIRE_ADMIN],
+            options[CONF_DISABLE_PINNING],
         )
 
     return True
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Panel Iframe entry."""
-    hass.data.setdefault(DOMAIN, {})
-    
-    # Register the custom panel
-    hass.http.register_view(PanelIframeView(
+    """Set up Panel IFrame entry."""
+    # Register panel
+    await async_register_panel(
+        hass,
         entry.entry_id,
-        entry.data["panel_id"],
-        entry.data["title"],
-        entry.data["icon"],
-        entry.data["url"],
-        entry.data.get("require_admin", False)
-    ))
-    
+        entry.data[CONF_URL],
+        None,  # relative_panel_url
+        entry.data[CONF_TITLE],
+        entry.data.get(CONF_ICON, DEFAULT_ICON),
+        entry.data.get(CONF_REQUIRE_ADMIN, False),
+        entry.data.get(CONF_DISABLE_PINNING, False),
+    )
     return True
 
-class PanelIframeView:
-    """Serve the iframe panel."""
-    
-    url = "/local/panel_iframe/{path:.*}"
-    requires_auth = False
-    
-    def __init__(self, entry_id, panel_id, title, icon, url, require_admin):
-        self.name = f"panel_iframe_{panel_id}"
-        self.panel_id = panel_id
-        self.title = title
-        self.icon = icon
-        self.url = url
-        self.require_admin = require_admin
-        self.registered = False
-        
-    def register(self, app):
-        """Register the view with the HTTP app."""
-        if not self.registered:
-            app.router.add_get(f"/api/panel_iframe/{self.panel_id}", self.get_config)
-            app.router.add_get(f"/panel_iframe/{self.panel_id}", self.get_panel)
-            self.registered = True
-            
-    async def get_config(self, request):
-        """Return panel configuration."""
-        from aiohttp import web
-        return web.json_response({
-            "component_name": "iframe",
-            "config": {
-                "title": self.title,
-                "icon": self.icon,
-                "url": self.url,
-                "require_admin": self.require_admin
-            }
-        })
-        
-    async def get_panel(self, request):
-        """Serve the iframe panel."""
-        from aiohttp import web
-        
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>{self.title}</title>
-    <style>
-        body {{
-            margin: 0;
-            padding: 0;
-            height: 100vh;
-            overflow: hidden;
-            background-color: white;
-        }}
-        iframe {{
-            width: 100%;
-            height: 100%;
-            border: none;
-        }}
-    </style>
-</head>
-<body>
-    <iframe src="{self.url}" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation"></iframe>
-</body>
-</html>
-        """
-        return web.Response(text=html_content, content_type='text/html')
 
-# Add a simple setup function that Home Assistant can call
-async def setup(hass, config):
-    """Setup function for Home Assistant."""
-    _LOGGER.info("Setting up Panel Iframe integration")
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload Panel IFrame entry."""
+    try:
+        hass.components.frontend.async_remove_panel(entry.entry_id)
+        _LOGGER.debug("Successfully removed panel %s", entry.entry_id)
+    except KeyError:
+        _LOGGER.error("Panel %s could not be removed. Panel was not registered", entry.entry_id)
     return True
+
+
+async def async_register_panel(
+    hass,
+    panel_id,
+    url,
+    relative_panel_url,
+    title,
+    icon,
+    require_admin,
+    disable_pinning,
+) -> None:
+    """Register a new panel."""
+    # Ensure frontend is loaded
+    if frontend.DOMAIN not in hass.config.components:
+        raise HomeAssistantError("Frontend is not loaded")
+
+    # Determine panel URL
+    if relative_panel_url is None:
+        relative_panel_url = f"/local/panel_iframe/{slugify(panel_id)}"
+
+    # Register the panel
+    try:
+        hass.components.frontend.async_register_built_in_panel(
+            component_name="iframe",
+            sidebar_title=title,
+            sidebar_icon=icon,
+            frontend_url_path=panel_id,
+            config={
+                "_panel_custom": {
+                    "html_url": f"{relative_panel_url}?{hass.data['lovelace']['mode']}",
+                    "js_url": f"/local/panel_iframe/iframe.js?{hass.data['lovelace']['mode']}",
+                },
+                "url": url,
+                "require_admin": require_admin,
+                "disable_pinning": disable_pinning,
+            },
+            require_admin=require_admin,
+        )
+        _LOGGER.debug("Successfully registered panel %s", panel_id)
+    except ValueError as e:
+        _LOGGER.error("Could not register panel %s: %s", panel_id, e)
