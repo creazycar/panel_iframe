@@ -1,125 +1,149 @@
-import asyncio
-from typing import Any
-from homeassistant.core import HomeAssistant
+"""
+Panel Iframe Custom Component for Home Assistant
+Compatible with latest Home Assistant versions
+"""
+import logging
+from typing import Dict, Any
+from homeassistant.components import frontend
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.http import StaticPathConfig
-from homeassistant.components.frontend import async_register_built_in_panel
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
-import aiohttp
-from urllib.parse import urlparse, urljoin
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.typing import ConfigType
+import voluptuous as vol
 
-from .manifest import manifest
+DOMAIN = "panel_iframe"
+_LOGGER = logging.getLogger(__name__)
 
-DOMAIN = manifest.domain
-VERSION = manifest.version
-
-# 替换废弃的 HttpProxy，适配新版 HA
-class AsyncHttpProxy:
-    def __init__(self, target_url: str):
-        self.target_url = target_url
-        self.parsed_url = urlparse(target_url)
-
-    async def proxy_handler(self, request):
-        path = request.match_info.get('path', '')
-        full_url = urljoin(self.target_url, path)
-        
-        # 复制请求头
-        headers = dict(request.headers)
-        headers.pop('Host', None)
-        
-        # 创建客户端会话
-        session = async_create_clientsession(request.app['hass'])
-        try:
-            async with session.request(
-                method=request.method,
-                url=full_url,
-                headers=headers,
-                data=await request.read(),
-                params=request.query,
-                allow_redirects=False
-            ) as resp:
-                # 构建响应
-                response_headers = dict(resp.headers)
-                # 移除可能导致问题的头
-                response_headers.pop('Content-Encoding', None)
-                
-                return aiohttp.web.Response(
-                    body=await resp.read(),
-                    status=resp.status,
-                    headers=response_headers
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.Schema(
+            {
+                vol.Optional("panels"): vol.Schema(
+                    {
+                        str: {
+                            vol.Required("title"): str,
+                            vol.Required("icon", default="mdi:iframe"): str,
+                            vol.Required("url"): str,
+                            vol.Optional("require_admin", default=False): bool,
+                        }
+                    }
                 )
-        except Exception as e:
-            return aiohttp.web.Response(
-                status=500,
-                text=f"Proxy error: {str(e)}"
+            }
+        )
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the Panel Iframe component."""
+    conf = config.get(DOMAIN)
+    if conf is None:
+        return True
+
+    panels = conf.get("panels", {})
+
+    for panel_id, panel_data in panels.items():
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": "manual"},
+                data={
+                    "panel_id": panel_id,
+                    "title": panel_data["title"],
+                    "icon": panel_data["icon"],
+                    "url": panel_data["url"],
+                    "require_admin": panel_data.get("require_admin", False),
+                },
             )
-
-    def register(self, router):
-        router.add_route(
-            '*',
-            f"/panel_iframe_proxy/{id(self)}/{{path:.*}}",
-            self.proxy_handler
         )
 
-    def get_url(self):
-        return f"/panel_iframe_proxy/{id(self)}/"
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """设置集成"""
-    # 注册静态资源（适配新版 HA 路径注册方式）
-    await hass.http.async_register_static_paths([
-        StaticPathConfig(
-            "/panel_iframe_www",
-            hass.config.path(f"custom_components/{DOMAIN}/www"),
-            cache_headers=False
-        )
-    ])
-
-    # 读取配置
-    cfg = entry.options
-    url_path = entry.entry_id
-    title = entry.title
-    mode = cfg.get('mode', '0')
-    icon = cfg.get('icon', 'mdi:link-box-outline')
-    url = cfg.get('url', '')
-    require_admin = cfg.get('require_admin', False)
-    proxy_access = cfg.get('proxy_access', False)
-
-    if url:
-        module_url = f"/panel_iframe_www/panel_iframe.js?v={VERSION}"
-        
-        # 处理代理访问
-        if proxy_access:
-            try:
-                proxy = AsyncHttpProxy(url)
-                proxy.register(hass.http.app.router)
-                url = proxy.get_url()
-            except Exception as e:
-                hass.logger.error(f"Panel iframe proxy error: {e}")
-
-        # 注册面板（使用新版 async_register_built_in_panel）
-        await async_register_built_in_panel(
-            hass,
-            component_name="iframe",
-            frontend_url_path=url_path,
-            sidebar_title=title,
-            sidebar_icon=icon,
-            module_url=module_url,
-            config={
-                'mode': mode,
-                'url': url
-            },
-            require_admin=require_admin
-        )
-
-    # 监听配置更新
-    entry.async_on_unload(entry.add_update_listener(async_update_options))
     return True
 
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """更新配置选项"""
-    await hass.config_entries.async_reload(entry.entry_id)
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Panel Iframe entry."""
+    hass.data.setdefault(DOMAIN, {})
+    
+    # Register the custom panel
+    hass.http.register_view(PanelIframeView(
+        entry.entry_id,
+        entry.data["panel_id"],
+        entry.data["title"],
+        entry.data["icon"],
+        entry.data["url"],
+        entry.data.get("require_admin", False)
+    ))
+    
+    return True
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """卸载集成"""
+class PanelIframeView:
+    """Serve the iframe panel."""
+    
+    url = "/local/panel_iframe/{path:.*}"
+    requires_auth = False
+    
+    def __init__(self, entry_id, panel_id, title, icon, url, require_admin):
+        self.name = f"panel_iframe_{panel_id}"
+        self.panel_id = panel_id
+        self.title = title
+        self.icon = icon
+        self.url = url
+        self.require_admin = require_admin
+        self.registered = False
+        
+    def register(self, app):
+        """Register the view with the HTTP app."""
+        if not self.registered:
+            app.router.add_get(f"/api/panel_iframe/{self.panel_id}", self.get_config)
+            app.router.add_get(f"/panel_iframe/{self.panel_id}", self.get_panel)
+            self.registered = True
+            
+    async def get_config(self, request):
+        """Return panel configuration."""
+        from aiohttp import web
+        return web.json_response({
+            "component_name": "iframe",
+            "config": {
+                "title": self.title,
+                "icon": self.icon,
+                "url": self.url,
+                "require_admin": self.require_admin
+            }
+        })
+        
+    async def get_panel(self, request):
+        """Serve the iframe panel."""
+        from aiohttp import web
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{self.title}</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            background-color: white;
+        }}
+        iframe {{
+            width: 100%;
+            height: 100%;
+            border: none;
+        }}
+    </style>
+</head>
+<body>
+    <iframe src="{self.url}" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation"></iframe>
+</body>
+</html>
+        """
+        return web.Response(text=html_content, content_type='text/html')
+
+# Add a simple setup function that Home Assistant can call
+async def setup(hass, config):
+    """Setup function for Home Assistant."""
+    _LOGGER.info("Setting up Panel Iframe integration")
     return True
