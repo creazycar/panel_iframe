@@ -1,11 +1,13 @@
 {
   "domain": "panel_iframe",
   "name": "Panel Iframe",
-  "version": "1.0.4",
+  "version": "2.0.0",
   "documentation": "https://www.home-assistant.io/integrations/panel_iframe",
   "requirements": [],
   "codeowners": ["@home-assistant/core"],
   "iot_class": "local_polling",
   "config_flow": true,
-  "dependencies": ["frontend"]
+  "migration_to": "iframe",
+  "dependencies": ["frontend"],
+  "after_dependencies": ["lovelace"]
 }
