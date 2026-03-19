@@ -1,13 +1,10 @@
 {
-    "domain": "panel_iframe",
-    "name": "侧边栏面板",
-    "version": "2024.3.19",
-    "config_flow": true,
-    "documentation": "https://github.com/shaonianzhentan/panel_iframe",
-    "dependencies": ["frontend", "http"],
-    "codeowners": ["@shaonianzhentan"],
-    "quality_scale": "internal",
-    "requirements": [],
-    "iot_class": "local_push",
-    "version": "2026.3.19"
+  "domain": "panel_iframe",
+  "name": "Panel Iframe",
+  "version": "1.0.4",
+  "documentation": "https://www.home-assistant.io/integrations/panel_iframe",
+  "requirements": [],
+  "codeowners": ["@home-assistant/core"],
+  "iot_class": "local_polling",
+  "config_flow": true
 }
