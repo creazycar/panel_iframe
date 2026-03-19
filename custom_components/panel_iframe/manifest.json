@@ -1,10 +1,13 @@
 {
     "domain": "panel_iframe",
-    "name": "\u4FA7\u8FB9\u680F\u9762\u677F",
-    "version": "2024.7.30",
+    "name": "侧边栏面板",
+    "version": "2024.3.19",
     "config_flow": true,
-    "documentation": "/panel_iframe_www/mdi/preview.html",
-    "dependencies": ["frontend"],
+    "documentation": "https://github.com/shaonianzhentan/panel_iframe",
+    "dependencies": ["frontend", "http"],
     "codeowners": ["@shaonianzhentan"],
-    "quality_scale": "internal"
+    "quality_scale": "internal",
+    "requirements": [],
+    "iot_class": "local_push",
+    "version": "2026.3.19"
 }
