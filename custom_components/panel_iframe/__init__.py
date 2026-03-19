@@ -1,10 +1,10 @@
 """
-Panel Iframe Component for Home Assistant
-This module has been updated to work with the latest version of Home Assistant
+Custom Panel Iframe Integration for Home Assistant
+Compatible with latest Home Assistant versions
 """
-import asyncio
 import logging
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -13,7 +13,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ICON, CONF_REQUIRE_ADMIN, CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import collection
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import slugify
 
@@ -55,98 +54,136 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if conf is None:
         return True
 
-    # Create panel iframes
+    # Process configured panels
     for panel_id, options in conf.items():
-        # Make sure required values are set
-        assert CONF_URL in options
-        assert CONF_TITLE in options
+        try:
+            # Validate URL format
+            parsed_url = urlparse(options[CONF_URL])
+            if not parsed_url.scheme or not parsed_url.netloc:
+                _LOGGER.error("Invalid URL format for panel %s: %s", panel_id, options[CONF_URL])
+                continue
 
-        # Set default value for optional values
-        if CONF_ICON not in options:
-            options[CONF_ICON] = DEFAULT_ICON
-        if CONF_REQUIRE_ADMIN not in options:
-            options[CONF_REQUIRE_ADMIN] = False
-        if CONF_DISABLE_PINNING not in options:
-            options[CONF_DISABLE_PINNING] = False
+            # Set default values
+            panel_options = {
+                CONF_URL: options[CONF_URL],
+                CONF_TITLE: options[CONF_TITLE],
+                CONF_ICON: options.get(CONF_ICON, DEFAULT_ICON),
+                CONF_REQUIRE_ADMIN: options.get(CONF_REQUIRE_ADMIN, False),
+                CONF_DISABLE_PINNING: options.get(CONF_DISABLE_PINNING, False),
+                CONF_RELATIVE_PANEL_URL: options.get(CONF_RELATIVE_PANEL_URL)
+            }
 
-        # Register panel
-        await async_register_panel(
-            hass,
-            panel_id,
-            options[CONF_URL],
-            options.get(CONF_RELATIVE_PANEL_URL),
-            options[CONF_TITLE],
-            options[CONF_ICON],
-            options[CONF_REQUIRE_ADMIN],
-            options[CONF_DISABLE_PINNING],
-        )
+            # Register panel
+            await async_register_panel(
+                hass,
+                panel_id,
+                panel_options
+            )
+        except Exception as e:
+            _LOGGER.error("Failed to register panel %s: %s", panel_id, e)
 
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Panel IFrame entry."""
-    # Register panel
-    await async_register_panel(
-        hass,
-        entry.entry_id,
-        entry.data[CONF_URL],
-        None,  # relative_panel_url
-        entry.data[CONF_TITLE],
-        entry.data.get(CONF_ICON, DEFAULT_ICON),
-        entry.data.get(CONF_REQUIRE_ADMIN, False),
-        entry.data.get(CONF_DISABLE_PINNING, False),
-    )
-    return True
+    try:
+        # Prepare panel options from config entry
+        panel_options = {
+            CONF_URL: entry.data[CONF_URL],
+            CONF_TITLE: entry.data[CONF_TITLE],
+            CONF_ICON: entry.data.get(CONF_ICON, DEFAULT_ICON),
+            CONF_REQUIRE_ADMIN: entry.data.get(CONF_REQUIRE_ADMIN, False),
+            CONF_DISABLE_PINNING: entry.data.get(CONF_DISABLE_PINNING, False),
+            CONF_RELATIVE_PANEL_URL: None  # Will be auto-generated
+        }
+        
+        # Register panel
+        await async_register_panel(
+            hass,
+            entry.entry_id,
+            panel_options
+        )
+        return True
+    except Exception as e:
+        _LOGGER.error("Failed to setup entry %s: %s", entry.entry_id, e)
+        return False
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Panel IFrame entry."""
     try:
-        hass.components.frontend.async_remove_panel(entry.entry_id)
+        # Remove panel using the correct frontend method
+        frontend.async_remove_panel(hass, entry.entry_id)
         _LOGGER.debug("Successfully removed panel %s", entry.entry_id)
-    except KeyError:
-        _LOGGER.error("Panel %s could not be removed. Panel was not registered", entry.entry_id)
-    return True
+        return True
+    except Exception as e:
+        _LOGGER.error("Failed to remove panel %s: %s", entry.entry_id, e)
+        return False
 
 
 async def async_register_panel(
-    hass,
-    panel_id,
-    url,
-    relative_panel_url,
-    title,
-    icon,
-    require_admin,
-    disable_pinning,
+    hass: HomeAssistant,
+    panel_id: str,
+    options: Dict[str, Any]
 ) -> None:
     """Register a new panel."""
-    # Ensure frontend is loaded
-    if frontend.DOMAIN not in hass.config.components:
-        raise HomeAssistantError("Frontend is not loaded")
-
-    # Determine panel URL
-    if relative_panel_url is None:
-        relative_panel_url = f"/local/panel_iframe/{slugify(panel_id)}"
-
-    # Register the panel
     try:
-        hass.components.frontend.async_register_built_in_panel(
+        # Ensure frontend is loaded
+        if frontend.DOMAIN not in hass.config.components:
+            raise HomeAssistantError("Frontend is not loaded")
+
+        # Generate relative panel URL if not provided
+        relative_panel_url = options.get(CONF_RELATIVE_PANEL_URL)
+        if relative_panel_url is None:
+            relative_panel_url = f"/local/panel_iframe/{slugify(panel_id)}"
+
+        # Prepare panel configuration
+        panel_config = {
+            "url": options[CONF_URL],
+            "require_admin": options[CONF_REQUIRE_ADMIN],
+            "disable_pinning": options[CONF_DISABLE_PINNING],
+        }
+
+        # Register the built-in panel with error handling
+        frontend.async_register_built_in_panel(
+            hass,
             component_name="iframe",
-            sidebar_title=title,
-            sidebar_icon=icon,
+            sidebar_title=options[CONF_TITLE],
+            sidebar_icon=options[CONF_ICON],
             frontend_url_path=panel_id,
-            config={
-                "_panel_custom": {
-                    "html_url": f"{relative_panel_url}?{hass.data['lovelace']['mode']}",
-                    "js_url": f"/local/panel_iframe/iframe.js?{hass.data['lovelace']['mode']}",
-                },
-                "url": url,
-                "require_admin": require_admin,
-                "disable_pinning": disable_pinning,
-            },
-            require_admin=require_admin,
+            config=panel_config,
+            require_admin=options[CONF_REQUIRE_ADMIN],
         )
-        _LOGGER.debug("Successfully registered panel %s", panel_id)
+        
+        _LOGGER.info("Successfully registered panel '%s' with URL: %s", panel_id, options[CONF_URL])
+        
     except ValueError as e:
-        _LOGGER.error("Could not register panel %s: %s", panel_id, e)
+        # This catches duplicate panel registration errors
+        if "Panel id already registered" in str(e):
+            _LOGGER.warning("Panel %s already exists, removing and re-registering", panel_id)
+            try:
+                frontend.async_remove_panel(hass, panel_id)
+                # Retry registration
+                frontend.async_register_built_in_panel(
+                    hass,
+                    component_name="iframe",
+                    sidebar_title=options[CONF_TITLE],
+                    sidebar_icon=options[CONF_ICON],
+                    frontend_url_path=panel_id,
+                    config=panel_config,
+                    require_admin=options[CONF_REQUIRE_ADMIN],
+                )
+            except Exception as retry_error:
+                _LOGGER.error("Retry registration failed for panel %s: %s", panel_id, retry_error)
+        else:
+            _LOGGER.error("ValueError registering panel %s: %s", panel_id, e)
+    except Exception as e:
+        _LOGGER.error("Unexpected error registering panel %s: %s", panel_id, e)
+        raise
+
+
+# For backward compatibility
+async def setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Setup function for older Home Assistant versions."""
+    return await async_setup(hass, config)
