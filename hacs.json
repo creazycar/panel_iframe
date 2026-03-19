@@ -1,7 +1,15 @@
 {
-    "name": "侧边栏面板",
-    "country": "CN",
-    "render_readme": true,
-    "domains": [],
-    "homeassistant": "2024.7.0"
+  "name": "Panel Iframe",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["panel_iframe"],
+  "homeassistant": "2023.1.0",
+  "iot_class": "Local Polling",
+  "version": "1.0.4",
+  "country": ["ALL"],
+  "filename": "panel_iframe.zip",
+  "hide_default_branch": true,
+  "zip_release": true,
+  "persistent_directory": "",
+  "hacs": "1.7.0"
 }
